@@ -1,0 +1,73 @@
+//@version=5
+strategy("ICT OB + Liquidity Scalping", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=1, initial_capital=10000, currency=currency.USD)
+
+// === PARÁMETROS ===
+session_london = input.session("0800-1100", "London Session")
+session_ny = input.session("1330-1600", "NY Session")
+timeframe_lookback = input.int(20, "Lookback para Liquidez", minval=5)
+sl_pips = input.int(5, "SL (pips)", minval=1)
+rr = input.float(2.0, "Risk/Reward Ratio", minval=1.5)
+max_trades = input.int(3, "Máx. operaciones por sesión", minval=1)
+
+// === FUNCIONES ===
+// Conversión de pips a precio
+pip = syminfo.mintick * 10
+sl_val = sl_pips * pip
+
+// Sesión activa
+in_session = session.isin(session_london) or session.isin(session_ny)
+
+// Máximos/mínimos recientes
+highs = ta.highest(high, timeframe_lookback)
+lows = ta.lowest(low, timeframe_lookback)
+
+// Barrido de liquidez
+liquidity_sweep_long = low < lows[1]
+liquidity_sweep_short = high > highs[1]
+
+// Order Block simplificado (última vela contraria antes del movimiento)
+ob_bull = close[2] < open[2] and close[1] > open[1] and close > open
+ob_bear = close[2] > open[2] and close[1] < open[1] and close < open
+
+// FVG (Fair Value Gap) simplificado
+def fvg_up() => low[2] > high[0]
+def fvg_down() => high[2] < low[0]
+
+// Contador de trades por sesión
+time = timestamp("GMT+0", year, month, dayofmonth, hour, minute)
+var float last_session = na
+var int trades_this_session = 0
+if not na(last_session) and not in_session
+    trades_this_session := 0
+if in_session and (na(last_session) or last_session != time)
+    last_session := time
+    trades_this_session := 0
+
+// === ENTRADAS ===
+long_cond = in_session and liquidity_sweep_long and ob_bull and fvg_up() and trades_this_session < max_trades
+short_cond = in_session and liquidity_sweep_short and ob_bear and fvg_down() and trades_this_session < max_trades
+
+// === EJECUCIÓN ===
+if long_cond
+    entry_price = close
+    stop_price = low - sl_val
+    tp_price = entry_price + (entry_price - stop_price) * rr
+    strategy.entry("Long", strategy.long, comment="ICT Long")
+    strategy.exit("TP/SL Long", from_entry="Long", stop=stop_price, limit=tp_price)
+    trades_this_session += 1
+if short_cond
+    entry_price = close
+    stop_price = high + sl_val
+    tp_price = entry_price - (stop_price - entry_price) * rr
+    strategy.entry("Short", strategy.short, comment="ICT Short")
+    strategy.exit("TP/SL Short", from_entry="Short", stop=stop_price, limit=tp_price)
+    trades_this_session += 1
+
+// === VISUALIZACIÓN ===
+plotshape(long_cond, title="Long Signal", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.tiny)
+plotshape(short_cond, title="Short Signal", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.tiny)
+
+// === ADVERTENCIA ===
+var label warning = na
+if bar_index == 1
+    warning := label.new(bar_index, high, "ADVERTENCIA: No existe una estrategia 100% ganadora en el mundo real. Este script es solo para fines educativos y de backtesting ideal.", color=color.yellow, style=label.style_label_down, textcolor=color.black)
